@@ -1,0 +1,8 @@
+# Ignore the Excel file
+source.xlsx
+
+# Ignore vendor directory
+vendor/
+
+# Ignore any local environment files
+.env
