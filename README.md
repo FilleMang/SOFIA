@@ -27,6 +27,7 @@ Swedish front end, should be easy to adapt for your needs.
 1.  **Clone the Repository**:
 
    git clone https://github.com/FilleMang/SOFIA.git
+   
    cd sofia
 
 2.  **Install Dependencies:**
