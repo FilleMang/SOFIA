@@ -1,7 +1,7 @@
 # SOFIA - System för Operativ Förvaltning, Incidentöversikt och Analys
 
 SOFIA is a simple web-based system for keeping track the status of various systems without an external database; SOFIA uses a xlsx file.
-Swedish front end, should be easy to change after your needs. 
+Swedish front end, should be easy to adapt for your needs. 
 
 ## Features
 
