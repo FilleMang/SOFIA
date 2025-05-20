@@ -3,6 +3,9 @@
 SOFIA is a simple web-based system for keeping track the status of various systems without an external database; SOFIA uses a xlsx file.
 Swedish front end, should be easy to adapt for your needs. 
 
+![image](https://github.com/user-attachments/assets/987b6e81-6af3-4f10-b710-b05c3c70c46e)
+
+
 ## Features
 
 - Track the status of systems (Tested OK, Not Tested).
