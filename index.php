@@ -1,4 +1,5 @@
 <?php
+session_set_cookie_params(["secure" => true, "httponly" => true, "samesite" => "Strict"]);
 session_start();
 require 'vendor/autoload.php';
 use PhpOffice\PhpSpreadsheet\IOFactory;
