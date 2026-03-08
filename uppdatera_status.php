@@ -1,45 +1,61 @@
 <?php
+session_start();
 require 'vendor/autoload.php';
 use PhpOffice\PhpSpreadsheet\IOFactory;
+
+// ── Enbart POST tillåtet ──
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    header('Content-Type: application/json');
+    echo json_encode(['success' => false, 'message' => 'Endast POST tillåtet']);
+    exit;
+}
+
+// ── CSRF-validering ──
+$token = $_POST['csrf_token'] ?? '';
+if (empty($token) || !hash_equals($_SESSION['csrf_token'] ?? '', $token)) {
+    http_response_code(403);
+    header('Content-Type: application/json');
+    echo json_encode(['success' => false, 'message' => 'Ogiltig CSRF-token']);
+    exit;
+}
+
+// ── Fillåsning ──
+$lockFile = __DIR__ . '/source.xlsx.lock';
+$lockFp = fopen($lockFile, 'w');
+if (!flock($lockFp, LOCK_EX)) {
+    header('Content-Type: application/json');
+    echo json_encode(['success' => false, 'message' => 'Kunde inte låsa filen, försök igen']);
+    fclose($lockFp);
+    exit;
+}
 
 $spreadsheet = IOFactory::load('source.xlsx');
 $sheet = $spreadsheet->getActiveSheet();
 
-/**
- * Normalizes a system name string for consistent comparison.
- * - Trims whitespace.
- * - Replaces multiple spaces with a single space.
- * - Decodes URL-encoded characters (useful if names were mistakenly saved encoded).
- */
+// ── Tillåtna statusvärden ──
+$allowedStatuses = ['Testad OK', 'Inte testad', ''];
+
 function normalizeSystemName($name) {
-    // 1. URL decode in case it was saved encoded in the Excel file
     $name = urldecode($name);
-    // 2. Trim leading/trailing whitespace
     $name = trim($name);
-    // 3. Replace multiple spaces with a single space
     $name = preg_replace('/\s+/', ' ', $name);
-    // 4. Optionally, ensure consistent case for comparison (e.g., lowercase all)
-    //    Commented out for now, but useful if "System A" should match "system a"
-    // $name = mb_strtolower($name, 'UTF-8');
     return $name;
 }
 
-// Function to calculate and return statistics
 function getSystemStats($sheet) {
     $testedOkCount = 0;
     $totalSystems = 0;
-    $highestRow = $sheet->getHighestDataRow(); // Get the highest row with data
-    $systemNamesInSheet = []; // To store normalized system names from sheet
+    $highestRow = $sheet->getHighestDataRow();
+    $systemNamesInSheet = [];
 
     for ($row = 1; $row <= $highestRow; $row++) {
         $systemName = $sheet->getCell('A' . $row)->getValue();
         if (empty($systemName)) {
-            continue; // Skip entirely empty rows in column A
+            continue;
         }
         $normalizedSystemName = normalizeSystemName($systemName);
 
-        // Check if this normalized system name is already counted (e.g., header row)
-        // This is important to avoid double counting if header is included in iteration
         if (!in_array($normalizedSystemName, $systemNamesInSheet) && !empty($normalizedSystemName)) {
             $systemNamesInSheet[] = $normalizedSystemName;
             $status = trim($sheet->getCell('B' . $row)->getValue());
@@ -57,30 +73,29 @@ function getSystemStats($sheet) {
     ];
 }
 
-
 $response = ['success' => false, 'message' => ''];
-$updateNeeded = false; // Flag to indicate if we need to save the spreadsheet
+$updateNeeded = false;
 
-// Normalize the incoming system name from GET request
-$requestedSystem = isset($_GET['system']) ? normalizeSystemName($_GET['system']) : null;
-$requestedStatus = isset($_GET['status']) ? normalizeSystemName($_GET['status']) : null; // Also normalize status
+$requestedSystem = isset($_POST['system']) ? normalizeSystemName($_POST['system']) : null;
+$requestedStatus = isset($_POST['status']) ? trim($_POST['status']) : null;
 
-if (isset($_GET['action'])) {
-    $action = $_GET['action'];
+if (isset($_POST['action'])) {
+    $action = $_POST['action'];
 
     if ($action === 'clear_status') {
-        // Clear all status cells except potentially header row (row 1)
         $highestRow = $sheet->getHighestDataRow();
-        for ($row = 2; $row <= $highestRow; $row++) { // Start from row 2 if row 1 is header
+        for ($row = 2; $row <= $highestRow; $row++) {
             $sheet->setCellValue('B' . $row, '');
         }
-        $response['message'] = "All status cells have been cleared.";
+        $response['message'] = "All status har nollställts.";
         $updateNeeded = true;
+
     } elseif ($action === 'add_system') {
         if (empty($requestedSystem)) {
-            $response['message'] = "System name cannot be empty.";
+            $response['message'] = "Systemnamn kan inte vara tomt.";
+        } elseif (mb_strlen($requestedSystem) > 200) {
+            $response['message'] = "Systemnamn får max vara 200 tecken.";
         } else {
-            // Check if system already exists using normalized names
             $systemExists = false;
             $highestRow = $sheet->getHighestDataRow();
             for ($row = 1; $row <= $highestRow; $row++) {
@@ -91,23 +106,28 @@ if (isset($_GET['action'])) {
             }
 
             if ($systemExists) {
-                $response['message'] = "System '$requestedSystem' already exists.";
+                $response['message'] = "System '$requestedSystem' finns redan.";
             } else {
-                $nextRow = $sheet->getHighestRow() + 1; // getHighestRow gives the last populated row number
-                $sheet->setCellValue('A' . $nextRow, $requestedSystem); // Write the normalized name
-                $sheet->setCellValue('B' . $nextRow, ''); // Initial empty status
-                $response['message'] = "System '$requestedSystem' has been added.";
-                $updateNeeded = true;
+                $stats = getSystemStats($sheet);
+                if ($stats['totalSystems'] >= 500) {
+                    $response['message'] = "Max 500 system tillåtet.";
+                } else {
+                    $nextRow = $sheet->getHighestRow() + 1;
+                    $sheet->setCellValue('A' . $nextRow, $requestedSystem);
+                    $sheet->setCellValue('B' . $nextRow, '');
+                    $response['message'] = "System '$requestedSystem' har lagts till.";
+                    $updateNeeded = true;
+                }
             }
         }
+
     } elseif ($action === 'remove_system') {
         if (empty($requestedSystem)) {
-            $response['message'] = "System name cannot be empty.";
+            $response['message'] = "Systemnamn kan inte vara tomt.";
         } else {
             $rowToRemove = null;
             $highestRow = $sheet->getHighestDataRow();
             for ($row = 1; $row <= $highestRow; $row++) {
-                // Compare normalized names
                 if (normalizeSystemName($sheet->getCell('A' . $row)->getValue()) === $requestedSystem) {
                     $rowToRemove = $row;
                     break;
@@ -115,27 +135,27 @@ if (isset($_GET['action'])) {
             }
 
             if ($rowToRemove) {
-                if ($rowToRemove === 1) { // Assuming row 1 is your header and should not be removed
-                    $response['message'] = "Cannot remove header row.";
+                if ($rowToRemove === 1) {
+                    $response['message'] = "Kan inte ta bort rubrikraden.";
                 } else {
                     $sheet->removeRow($rowToRemove);
-                    $response['message'] = "System '$requestedSystem' has been removed.";
+                    $response['message'] = "System '$requestedSystem' har tagits bort.";
                     $updateNeeded = true;
                 }
             } else {
-                $response['message'] = "System not found.";
+                $response['message'] = "Systemet hittades inte.";
             }
         }
     }
 } else {
-    // This is the "update status" path
     if (empty($requestedSystem) || !isset($requestedStatus)) {
-        $response['message'] = "System or status not provided.";
+        $response['message'] = "System eller status saknas.";
+    } elseif (!in_array($requestedStatus, $allowedStatuses)) {
+        $response['message'] = "Otillåtet statusvärde.";
     } else {
         $rowToUpdate = null;
         $highestRow = $sheet->getHighestDataRow();
         for ($row = 1; $row <= $highestRow; $row++) {
-            // Compare normalized names
             if (normalizeSystemName($sheet->getCell('A' . $row)->getValue()) === $requestedSystem) {
                 $rowToUpdate = $row;
                 break;
@@ -143,16 +163,15 @@ if (isset($_GET['action'])) {
         }
 
         if ($rowToUpdate) {
-            $sheet->setCellValue('B' . $rowToUpdate, $requestedStatus); // Write the normalized status
-            $response['message'] = "Updating status for $requestedSystem to $requestedStatus.";
+            $sheet->setCellValue('B' . $rowToUpdate, $requestedStatus);
+            $response['message'] = "Status uppdaterad för $requestedSystem.";
             $updateNeeded = true;
         } else {
-            $response['message'] = "System not found.";
+            $response['message'] = "Systemet hittades inte.";
         }
     }
 }
 
-// Only save if an update was actually made
 if ($updateNeeded) {
     try {
         $writer = IOFactory::createWriter($spreadsheet, 'Xlsx');
@@ -160,17 +179,13 @@ if ($updateNeeded) {
         $response['success'] = true;
     } catch (\PhpOffice\PhpSpreadsheet\Exception $e) {
         $response['success'] = false;
-        $response['message'] = "Error saving file: " . $e->getMessage();
-    }
-} else {
-    // If no update was made, but it's a valid request (e.g., trying to add an existing system)
-    // still return success true if no specific error message implies failure.
-    if (!isset($response['success'])) {
-         $response['success'] = true;
+        $response['message'] = "Fel vid sparning: " . $e->getMessage();
     }
 }
 
-// After any action, re-calculate and include the latest stats
+flock($lockFp, LOCK_UN);
+fclose($lockFp);
+
 $stats = getSystemStats($sheet);
 $response = array_merge($response, $stats);
 

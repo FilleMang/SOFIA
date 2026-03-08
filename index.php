@@ -1,6 +1,13 @@
 <?php
+session_start();
 require 'vendor/autoload.php';
 use PhpOffice\PhpSpreadsheet\IOFactory;
+
+// ── CSRF-token ──
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrfToken = $_SESSION['csrf_token'];
 
 $spreadsheet = IOFactory::load('source.xlsx');
 $sheet = $spreadsheet->getActiveSheet();
@@ -36,7 +43,7 @@ $percentageTestedOk = ($totalSystems > 0) ? round(($testedOkCount / $totalSystem
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SOFIA - System för Operativ Förvaltning, Incidentöversikt och Analys</title>
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
     <style>
         .section { margin-bottom: 20px; }
         table { width: 100%; border-collapse: collapse; }
@@ -47,6 +54,8 @@ $percentageTestedOk = ($totalSystems > 0) ? round(($testedOkCount / $totalSystem
     </style>
     <script>
     $(document).ready(function() {
+        var csrfToken = <?php echo json_encode($csrfToken); ?>;
+
         function updateStatsDisplay(stats) {
             $('#tested-ok-count').text(stats.testedOkCount);
             $('#total-systems').text(stats.totalSystems);
@@ -54,54 +63,46 @@ $percentageTestedOk = ($totalSystems > 0) ? round(($testedOkCount / $totalSystem
         }
 
         $('.update-status-btn').on('click', function() {
-            var systemIdSafe = $(this).data('system-id-safe'); // Get the *safe* ID from the button
+            var systemIdSafe = $(this).data('system-id-safe');
             var newStatus = $(this).data('status');
-            var systemToUpdateInPHP = $(this).data('system'); // Get the *decoded* name for PHP (e.g., "My System")
-
-            console.log("--- Update Button Clicked ---");
-            console.log("systemIdSafe (for DOM update):", systemIdSafe);
-            console.log("systemToUpdateInPHP (for AJAX):", systemToUpdateInPHP);
-            console.log("newStatus:", newStatus);
+            var systemToUpdateInPHP = $(this).data('system');
 
             $.ajax({
                 url: 'uppdatera_status.php',
-                type: 'GET',
-                data: { system: systemToUpdateInPHP, status: newStatus }, // Send the decoded name to PHP
+                type: 'POST',
+                data: { system: systemToUpdateInPHP, status: newStatus, csrf_token: csrfToken },
                 dataType: 'json',
                 success: function(response) {
-                    console.log("AJAX Success Response:", response);
                     if (response.success) {
-                        // Select the <td> using the generated safe ID
-                        $('#status-cell-' + systemIdSafe).text(newStatus); 
-                        
+                        $('#status-cell-' + systemIdSafe).text(newStatus);
                         updateStatsDisplay(response);
                     } else {
-                        console.error('Server error: ' + response.message);
+                        alert('Fel: ' + response.message);
                     }
                 },
                 error: function(xhr, status, error) {
-                    console.error('AJAX Error:', error, xhr, status);
+                    console.error('AJAX Error:', error);
                 }
             });
         });
 
         $('#clear-status-btn').on('click', function() {
+            if (!confirm('Nollställ all status?')) return;
             $.ajax({
                 url: 'uppdatera_status.php',
-                type: 'GET',
-                data: { action: 'clear_status' },
+                type: 'POST',
+                data: { action: 'clear_status', csrf_token: csrfToken },
                 dataType: 'json',
                 success: function(response) {
-                    console.log("AJAX Success Response (Clear):", response);
                     if (response.success) {
                         $('.status-cell').text('Okänd');
                         updateStatsDisplay(response);
                     } else {
-                        console.error('Server error: ' + response.message);
+                        alert('Fel: ' + response.message);
                     }
                 },
                 error: function(xhr, status, error) {
-                    console.error('AJAX Error (Clear):', error, xhr, status);
+                    console.error('AJAX Error:', error);
                 }
             });
         });
@@ -110,51 +111,44 @@ $percentageTestedOk = ($totalSystems > 0) ? round(($testedOkCount / $totalSystem
             e.preventDefault();
             var system = $('#new-system').val();
 
-            console.log("--- Add System Clicked ---");
-            console.log("New System Name:", system);
-
             $.ajax({
                 url: 'uppdatera_status.php',
-                type: 'GET',
-                data: { action: 'add_system', system: system },
+                type: 'POST',
+                data: { action: 'add_system', system: system, csrf_token: csrfToken },
                 dataType: 'json',
                 success: function(response) {
-                    console.log("AJAX Success Response (Add):", response);
                     alert(response.message);
                     if (response.success) {
-                        location.reload(); // Reload the page to reflect changes in the table
+                        location.reload();
                     }
                 },
                 error: function(xhr, status, error) {
-                    console.error('AJAX Error (Add):', error, xhr, status);
+                    console.error('AJAX Error:', error);
                 }
             });
         });
 
         $('.remove-system-btn').on('click', function() {
-            var systemToRemoveInPHP = $(this).data('system'); // Decoded system name for PHP
-            var systemIdSafe = $(this).data('system-id-safe'); // Safe ID for DOM removal
+            var systemToRemoveInPHP = $(this).data('system');
+            var systemIdSafe = $(this).data('system-id-safe');
 
-            console.log("--- Remove Button Clicked ---");
-            console.log("systemToRemoveInPHP (for AJAX):", systemToRemoveInPHP);
-            console.log("systemIdSafe (for DOM removal):", systemIdSafe);
+            if (!confirm('Ta bort "' + systemToRemoveInPHP + '"?')) return;
 
             $.ajax({
                 url: 'uppdatera_status.php',
-                type: 'GET',
-                data: { action: 'remove_system', system: systemToRemoveInPHP },
+                type: 'POST',
+                data: { action: 'remove_system', system: systemToRemoveInPHP, csrf_token: csrfToken },
                 dataType: 'json',
                 success: function(response) {
-                    console.log("AJAX Success Response (Remove):", response);
-                    alert(response.message);
                     if (response.success) {
-                        // Remove the row using the safe ID
                         $('#status-cell-' + systemIdSafe).closest('tr').remove();
                         updateStatsDisplay(response);
+                    } else {
+                        alert('Fel: ' + response.message);
                     }
                 },
                 error: function(xhr, status, error) {
-                    console.error('AJAX Error (Remove):', error, xhr, status);
+                    console.error('AJAX Error:', error);
                 }
             });
         });
@@ -170,14 +164,10 @@ $percentageTestedOk = ($totalSystems > 0) ? round(($testedOkCount / $totalSystem
                 <th>Action</th>
             </tr>
             <?php foreach ($data as $row) {
-                // Generate a safe ID for HTML: replace non-alphanumeric (except underscore and hyphen) characters with underscores.
-                // This creates IDs like "My_System" which are perfectly valid for HTML IDs and jQuery selectors.
                 $safeSystemId = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $row['system']);
-                // Trim any leading/trailing underscores that might result from the replacement
                 $safeSystemId = trim($safeSystemId, '_');
-                // Fallback for very strange system names that might result in empty safe ID
                 if (empty($safeSystemId)) {
-                    $safeSystemId = 'system_' . md5($row['system']); // Use a hash as a unique fallback
+                    $safeSystemId = 'system_' . md5($row['system']);
                 }
             ?>
             <tr>
@@ -197,7 +187,7 @@ $percentageTestedOk = ($totalSystems > 0) ? round(($testedOkCount / $totalSystem
 
     <div class="section">
         <form id="add-system-form" style="display: inline-block;">
-            <input type="text" id="new-system" placeholder="Lägg till system" required>
+            <input type="text" id="new-system" placeholder="Lägg till system" required maxlength="200">
             <button type="submit">Lägg till system</button>
         </form>
         <button id="clear-status-btn" style="display: inline-block; margin-left: 10px;">Nollställ status</button>
